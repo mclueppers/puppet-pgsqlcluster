@@ -81,7 +81,7 @@ class pgsqlcluster (
       exec { 'Run pg_basebackup on slave server':
         cwd         => '/',
         path        => '/bin:/sbin:/usr/sbin:/usr/bin',
-        command     => "pg_basebackup -h ${master_ip} -D /var/lib/pgsql/data/ -U replicator",
+        command     => "pg_basebackup -h ${master_ip} -D /var/lib/pgsql/data/ -U ${username}",
         user        => 'postgres',
         subscribe   => Exec['empty pgsql data folder'],
         refreshonly => true,
