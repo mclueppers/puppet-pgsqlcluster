@@ -42,7 +42,7 @@ class pgsqlcluster (
   $username    = undef,
   $password    = undef,
   $sibling_net = undef,
-) inherits ::pgsqlcluster::params { # lint:ignore:class_inherits_from_params_class
+) {
   # Validations
   validate_re($server_type, 'master|slave')
   validate_string($username, $password)
@@ -51,28 +51,63 @@ class pgsqlcluster (
     validate_ip_address($sibling_net)
   }
   
+  if $sibling_net =~ /^(\d+\.\d+\.\d+\.\d+)\/\d+$/ {
+    $master_ip = $1
+  } else {
+    $master_ip = $sibling_net
+  }
+
   case $server_type {
     'master': {}
     'slave': {
+      file { 'Add .pgpass to /var/lib/pgsql':
+        ensure  => 'file',
+        path    => '/var/lib/pgsql/.pgpass',
+        owner   => 'postgres',
+        group   => 'postgres',
+        mode    => '0400',
+        content => "${master_ip}:5432:replication:${username}:${password}",
+        notify  => Exec['empty pgsql data folder']
+      }
+
+      exec { 'empty pgsql data folder':
+        cwd         => '/var/lib/pgsql/data/',
+        path        => '/bin:/sbin:/usr/sbin:/usr/bin',
+        command     => 'rm -rf /var/lib/pgsql/data/*',
+        refreshonly => true,
+        before      => Class['Postgresql::Server::Reload']
+      }
+
+      exec { 'Run pg_basebackup on slave server':
+        cwd     => '/',
+        path    => '/bin:/sbin:/usr/sbin:/usr/bin',
+        command => "sudo -u postgres pg_basebackup -h ${master_ip} -D /var/lib/pgsql/data/ -U replicator",
+        require => Exec['empty pgsql data folder'],
+        notify  => Postgresql::Server::Pg_hba_rule["allow slave server at ${sibling_net} to access master"]
+      }
+
       postgresql::server::config_entry { 'hot_standby':
         value   => 'on'
-      } ->
+      }
+
       postgresql::server::recovery { "Create recovery.conf for slave at ${::fqdn}":
         standby_mode     => 'on',
-        primary_conninfo => "host=${sibling_net} port=5432 user=${username} password=${password} sslmode=require",
+        primary_conninfo => "host=${master_ip} port=5432 user=${username} password=${password} sslmode=require",
         trigger_file     => '/tmp/postgresql.trigger',
-        require          => Class['::postgresql::server']
+        require          => Exec['empty pgsql data folder'],
+        before           => Class['Postgresql::Server::Reload']
       }
     }
     default: { fail ("Server mode ${server_type} is not supported by module ${module_name}") }
   }
 
   file { '/var/lib/pgsql/data/server.crt':
-    ensure => 'present',
-    source => "file:///var/lib/puppet/ssl/certs/${::fqdn}.pem",
-    mode   => '0400',
-    owner  => 'postgres',
-    group  => 'postgres'
+    ensure  => 'present',
+    source  => "file:///var/lib/puppet/ssl/certs/${::fqdn}.pem",
+    mode    => '0400',
+    owner   => 'postgres',
+    group   => 'postgres',
+    require => Postgresql::Server::Role[$username]
   } ->
   file { '/var/lib/pgsql/data/server.key':
     ensure => 'present',
@@ -87,7 +122,8 @@ class pgsqlcluster (
     mode   => '0400',
     owner  => 'postgres',
     group  => 'postgres'
-  } ->
+  }
+  
   postgresql::server::config_entry { 'wal_level':
     value => 'hot_standby'
   } ->
@@ -107,7 +143,7 @@ class pgsqlcluster (
   postgresql::server::pg_hba_rule { "allow slave server at ${sibling_net} to access master":
     description => "Open up PostgreSQL for access from ${sibling_net}",
     type        => 'hostssl',
-    database    => 'all',
+    database    => 'replication',
     user        => $username,
     address     => $sibling_net,
     auth_method => 'md5',
