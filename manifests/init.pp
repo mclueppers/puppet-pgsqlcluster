@@ -66,8 +66,7 @@ class pgsqlcluster (
         owner   => 'postgres',
         group   => 'postgres',
         mode    => '0400',
-        content => "${master_ip}:5432:replication:${username}:${password}",
-        notify  => Exec['empty pgsql data folder']
+        content => "${master_ip}:5432:replication:${username}:${password}"
       }
 
       exec { 'empty pgsql data folder':
@@ -75,15 +74,16 @@ class pgsqlcluster (
         path        => '/bin:/sbin:/usr/sbin:/usr/bin',
         command     => 'rm -rf /var/lib/pgsql/data/*',
         refreshonly => true,
-        notify      => Exec['Run pg_basebackup on slave server'],
+        subscribe   => File['Add .pgpass to /var/lib/pgsql'],
         before      => Class['Postgresql::Server::Reload']
       }
 
       exec { 'Run pg_basebackup on slave server':
         cwd         => '/',
         path        => '/bin:/sbin:/usr/sbin:/usr/bin',
-        command     => "sudo -u postgres pg_basebackup -h ${master_ip} -D /var/lib/pgsql/data/ -U replicator",
-        require     => Exec['empty pgsql data folder'],
+        command     => "pg_basebackup -h ${master_ip} -D /var/lib/pgsql/data/ -U replicator",
+        user        => 'postgres',
+        subscribe   => Exec['empty pgsql data folder'],
         refreshonly => true,
         notify      => Postgresql::Server::Pg_hba_rule["allow slave server at ${sibling_net} to access master"]
       }
