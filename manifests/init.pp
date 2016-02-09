@@ -41,8 +41,32 @@ class pgsqlcluster (
   $server_type = 'master',
   $username    = undef,
   $password    = undef,
-
+  $sibling_net = undef,
 ) inherits ::pgsqlcluster::params { # lint:ignore:class_inherits_from_params_class
+  # Validations
+  validate_re($server_type, 'master|slave')
+  validate_string($username, $password)
+
+  if $server_type == 'master' {
+    validate_ip_address($sibling_net)
+  }
+  
+  case $server_type {
+    'master': {}
+    'slave': {
+      postgresql::server::config_entry { 'hot_standby':
+        value   => 'on'
+      } ->
+      postgresql::server::recovery { "Create recovery.conf for slave at ${::fqdn}":
+        standby_mode     => 'on',
+        primary_conninfo => "host=${sibling_net} port=5432 user=${username} password=${password} sslmode=require",
+        trigger_file     => '/tmp/postgresql.trigger',
+        require          => Class['::postgresql::server']
+      }
+    }
+    default: { fail ("Server mode ${server_type} is not supported by module ${module_name}") }
+  }
+
   file { '/var/lib/pgsql/data/server.crt':
     ensure => 'present',
     source => "file:///var/lib/puppet/ssl/certs/${::fqdn}.pem",
@@ -78,13 +102,14 @@ class pgsqlcluster (
   } ->
   postgresql::server::config_entry { 'ssl':
     value => 'on'
-  } ->
-  postgresql::server::pg_hba_rule { 'allow slave server to access master':
-    description => 'Open up PostgreSQL for access from 10.0.0.0/8',
+  }
+
+  postgresql::server::pg_hba_rule { "allow slave server at ${sibling_net} to access master":
+    description => "Open up PostgreSQL for access from ${sibling_net}",
     type        => 'hostssl',
     database    => 'all',
     user        => $username,
-    address     => '10.0.0.0/8',
+    address     => $sibling_net,
     auth_method => 'md5',
   } ->
   postgresql::server::role { $username:
