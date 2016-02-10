@@ -38,18 +38,18 @@
 # lint:ignore:autoloader_layout lint:ignore:80chars
 
 class pgsqlcluster (
-  $server_type = 'master',
-  $username    = undef,
-  $password    = undef,
-  $sibling_net = undef,
+  $server_type      = 'master',
+  $username         = undef,
+  $password         = undef,
+  $sibling_net      = undef,
+  $listen_addresses = undef,
+  $manage_postgres  = false,
 ) {
   # Validations
   validate_re($server_type, 'master|slave')
-  validate_string($username, $password)
-
-  if $server_type == 'master' {
-    validate_ip_address($sibling_net)
-  }
+  validate_string($username, $password,$listen_addresses)
+  validate_bool($manage_postgres)
+  validate_ip_address($sibling_net)
   
   if $sibling_net =~ /^(\d+\.\d+\.\d+\.\d+)\/\d+$/ {
     $master_ip = $1
@@ -57,9 +57,29 @@ class pgsqlcluster (
     $master_ip = $sibling_net
   }
 
+  $listen_addresses_r = $listen_addresses ? {
+    undef   => $::ipaddress,
+    default => $listen_addresses
+  }
+
   case $server_type {
-    'master': {}
+    'master': {
+      if $manage_postgres {
+        class { '::postgresql::server':
+          listen_addresses => $listen_addresses_r
+        }
+      }
+    }
+
     'slave': {
+      if $manage_postgres {
+        class { '::postgresql::server':
+          listen_addresses     => $listen_addresses_r,
+          manage_recovery_conf => true,
+          needs_initdb         => false,
+        }
+      }
+
       file { 'Add .pgpass to /var/lib/pgsql':
         ensure  => 'file',
         path    => '/var/lib/pgsql/.pgpass',
